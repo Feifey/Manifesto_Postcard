@@ -1,34 +1,34 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Manifesto Postcard Gallery</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <h1>📮 Manifesto Postcard Gallery</h1>
   <p>Upload your postcard and see others’ submissions!</p>
 
-  <input type="file" id="fileInput" accept="image/*" />
+  <input type="file" id="fileInput" accept="image/*">
   <button id="uploadBtn">Upload</button>
-
   <p id="statusMsg" class="hidden"></p>
 
   <div id="gallery" class="gallery"></div>
 
   <script type="module">
     import { db } from './firebase-config.js';
-    import {
-      collection, addDoc, getDocs, query, orderBy
+    import { 
+      collection, addDoc, getDocs, query, orderBy 
     } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
-    const imgbbAPIKey = "dd3cea06fcdb20b8aa36b4ba7f6d5ea1";
+    const imgbbAPIKey = "dd3cea06fcdb20b8aa36b4ba7f6d5ea1"; 
     const uploadBtn = document.getElementById("uploadBtn");
     const galleryDiv = document.getElementById("gallery");
     const statusMsg = document.getElementById("statusMsg");
 
-    // 🟢 Upload Image
+    // Upload image to imgbb + Firestore
     async function uploadImage() {
       const file = document.getElementById("fileInput").files[0];
       if (!file) return alert("Please select an image first!");
@@ -48,56 +48,59 @@
         const data = await res.json();
         const imageUrl = data.data.url;
 
+        // Save to Firestore
         const docRef = await addDoc(collection(db, "gallery"), {
           url: imageUrl,
           timestamp: Date.now(),
         });
 
-        statusMsg.textContent = "✅ Upload complete!";
+        showImage(imageUrl, docRef.id, true);
+        statusMsg.textContent = "✅ Uploaded successfully!";
         statusMsg.className = "status success";
-
-        showImage(docRef.id, imageUrl, true);
-      } catch (error) {
-        console.error("Upload failed:", error);
-        statusMsg.textContent = "❌ Upload failed. Please try again.";
+        setTimeout(() => (statusMsg.textContent = ""), 2500);
+      } catch (err) {
+        console.error(err);
+        statusMsg.textContent = "❌ Upload failed.";
         statusMsg.className = "status error";
       }
     }
 
-    // 🖼️ Show images
-    function showImage(id, url, prepend = false) {
+    // Load gallery
+    async function loadGallery() {
+      const snapshot = await getDocs(query(collection(db, "gallery"), orderBy("timestamp", "desc")));
+      snapshot.forEach((docSnap) => showImage(docSnap.data().url, docSnap.id));
+    }
+
+    // Display image
+    function showImage(url, id, prepend = false) {
       const img = document.createElement("img");
       img.src = url;
-      img.className = "clickable-image";
       img.loading = "lazy";
-      img.addEventListener("click", () => openImageModal(id, url));
+      img.className = "clickable-image";
+      img.addEventListener("click", () => openImageModal(url, id));
 
       if (prepend) galleryDiv.prepend(img);
       else galleryDiv.appendChild(img);
     }
 
-    // 🔍 Modal with zoom + comments
-    async function openImageModal(photoId, url) {
+    // Open modal (with zoom + comments)
+    function openImageModal(url, docId) {
       const modal = document.createElement("div");
       modal.className = "modal";
       modal.innerHTML = `
         <div class="modal-content">
-          <img src="${url}" alt="Postcard" class="zoomable" />
+          <img src="${url}" alt="Postcard" class="zoomable"/>
           <div class="comment-section">
             <h3>Comments</h3>
-            <div id="comments"></div>
-            <input id="commentInput" type="text" placeholder="Write a comment..." />
-            <button id="sendComment">Send</button>
+            <div class="comments-list" id="comments-${docId}"></div>
+            <textarea id="commentInput-${docId}" placeholder="Write a comment..."></textarea>
+            <button class="send-comment" data-id="${docId}">Send</button>
           </div>
         </div>
       `;
       document.body.appendChild(modal);
 
-      modal.addEventListener("click", (e) => {
-        if (e.target === modal) modal.remove();
-      });
-
-      // 🔍 Zoom
+      // Zoom with scroll
       const img = modal.querySelector(".zoomable");
       let scale = 1;
       img.addEventListener("wheel", (e) => {
@@ -107,45 +110,57 @@
         img.style.transform = `scale(${scale})`;
       });
 
-      // 🗨️ Load existing comments
-      const commentContainer = modal.querySelector("#comments");
-      const commentsRef = collection(db, "gallery", photoId, "comments");
-      const commentsSnap = await getDocs(query(commentsRef, orderBy("timestamp", "asc")));
-
-      commentsSnap.forEach((doc) => {
-        const p = document.createElement("p");
-        p.textContent = doc.data().text;
-        commentContainer.appendChild(p);
+      // Close modal when clicking outside
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) modal.remove();
       });
 
-      // ✏️ Add new comment
-      modal.querySelector("#sendComment").addEventListener("click", async () => {
-        const input = modal.querySelector("#commentInput");
-        const text = input.value.trim();
+      // Load existing comments
+      loadComments(docId);
+
+      // Handle new comment
+      modal.querySelector(".send-comment").addEventListener("click", async (e) => {
+        const commentInput = document.getElementById(`commentInput-${docId}`);
+        const text = commentInput.value.trim();
         if (!text) return;
 
-        await addDoc(collection(db, "gallery", photoId, "comments"), {
+        await addDoc(collection(db, "gallery", docId, "comments"), {
           text,
           timestamp: Date.now(),
         });
 
-        const p = document.createElement("p");
-        p.textContent = text;
-        commentContainer.appendChild(p);
-        input.value = "";
+        commentInput.value = "";
+        loadComments(docId); // Refresh comments
       });
     }
 
-    // 🖼️ Load all images
-    async function loadGallery() {
-      const snapshot = await getDocs(query(collection(db, "gallery"), orderBy("timestamp", "desc")));
-      snapshot.forEach((doc) => {
-        showImage(doc.id, doc.data().url);
+    // Load comments
+    async function loadComments(docId) {
+      const commentsContainer = document.getElementById(`comments-${docId}`);
+      commentsContainer.innerHTML = "";
+      const commentsSnap = await getDocs(
+        query(collection(db, "gallery", docId, "comments"), orderBy("timestamp", "asc"))
+      );
+
+      commentsSnap.forEach((doc) => {
+        const p = document.createElement("p");
+        p.textContent = doc.data().text;
+        p.className = "comment";
+        commentsContainer.appendChild(p);
       });
     }
 
     uploadBtn.addEventListener("click", uploadImage);
     loadGallery();
   </script>
+
+  <footer>
+    <p>
+      Project by 
+      <a href="https://readymag.website/u3553625258/5543554/" target="_blank" rel="noopener noreferrer">
+        <strong>Feifey W.</strong>
+      </a>
+    </p>
+  </footer>
 </body>
 </html>
