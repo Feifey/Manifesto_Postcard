@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Manifesto Postcard Gallery</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <h1>📮 Manifesto Postcard Gallery</h1>
+  <p>Upload your postcard and see others’ submissions!</p>
+
+  <input type="file" id="fileInput" accept="image/*" />
+  <button id="uploadBtn">Upload</button>
+
+  <p id="statusMsg" class="hidden"></p>
+
+  <div id="gallery" class="gallery"></div>
+
+  <script type="module">
+    import { db } from './firebase-config.js';
+    import {
+      collection, addDoc, getDocs, query, orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+
+    const imgbbAPIKey = "dd3cea06fcdb20b8aa36b4ba7f6d5ea1";
+    const uploadBtn = document.getElementById("uploadBtn");
+    const galleryDiv = document.getElementById("gallery");
+    const statusMsg = document.getElementById("statusMsg");
+
+    // 🟢 Upload Image
+    async function uploadImage() {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) return alert("Please select an image first!");
+
+      statusMsg.textContent = "Uploading...";
+      statusMsg.className = "status uploading";
+
+      const formData = new FormData();
+      formData.append("image", file);
+
+      try {
+        const res = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbAPIKey}`, {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await res.json();
+        const imageUrl = data.data.url;
+
+        const docRef = await addDoc(collection(db, "gallery"), {
+          url: imageUrl,
+          timestamp: Date.now(),
+        });
+
+        statusMsg.textContent = "✅ Upload complete!";
+        statusMsg.className = "status success";
+
+        showImage(docRef.id, imageUrl, true);
+      } catch (error) {
+        console.error("Upload failed:", error);
+        statusMsg.textContent = "❌ Upload failed. Please try again.";
+        statusMsg.className = "status error";
+      }
+    }
+
+    // 🖼️ Show images
+    function showImage(id, url, prepend = false) {
+      const img = document.createElement("img");
+      img.src = url;
+      img.className = "clickable-image";
+      img.loading = "lazy";
+      img.addEventListener("click", () => openImageModal(id, url));
+
+      if (prepend) galleryDiv.prepend(img);
+      else galleryDiv.appendChild(img);
+    }
+
+    // 🔍 Modal with zoom + comments
+    async function openImageModal(photoId, url) {
+      const modal = document.createElement("div");
+      modal.className = "modal";
+      modal.innerHTML = `
+        <div class="modal-content">
+          <img src="${url}" alt="Postcard" class="zoomable" />
+          <div class="comment-section">
+            <h3>Comments</h3>
+            <div id="comments"></div>
+            <input id="commentInput" type="text" placeholder="Write a comment..." />
+            <button id="sendComment">Send</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) modal.remove();
+      });
+
+      // 🔍 Zoom
+      const img = modal.querySelector(".zoomable");
+      let scale = 1;
+      img.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        scale += e.deltaY * -0.001;
+        scale = Math.min(Math.max(1, scale), 3);
+        img.style.transform = `scale(${scale})`;
+      });
+
+      // 🗨️ Load existing comments
+      const commentContainer = modal.querySelector("#comments");
+      const commentsRef = collection(db, "gallery", photoId, "comments");
+      const commentsSnap = await getDocs(query(commentsRef, orderBy("timestamp", "asc")));
+
+      commentsSnap.forEach((doc) => {
+        const p = document.createElement("p");
+        p.textContent = doc.data().text;
+        commentContainer.appendChild(p);
+      });
+
+      // ✏️ Add new comment
+      modal.querySelector("#sendComment").addEventListener("click", async () => {
+        const input = modal.querySelector("#commentInput");
+        const text = input.value.trim();
+        if (!text) return;
+
+        await addDoc(collection(db, "gallery", photoId, "comments"), {
+          text,
+          timestamp: Date.now(),
+        });
+
+        const p = document.createElement("p");
+        p.textContent = text;
+        commentContainer.appendChild(p);
+        input.value = "";
+      });
+    }
+
+    // 🖼️ Load all images
+    async function loadGallery() {
+      const snapshot = await getDocs(query(collection(db, "gallery"), orderBy("timestamp", "desc")));
+      snapshot.forEach((doc) => {
+        showImage(doc.id, doc.data().url);
+      });
+    }
+
+    uploadBtn.addEventListener("click", uploadImage);
+    loadGallery();
+  </script>
+</body>
+</html>
